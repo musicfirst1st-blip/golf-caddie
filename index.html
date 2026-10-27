@@ -33,7 +33,11 @@ header{background:var(--panel);border-bottom:1px solid var(--line);padding:8px m
 .hole-title{flex:1;text-align:center;font-weight:700;font-size:20px;font-variant-numeric:tabular-nums}
 .hole-title small{font-weight:500;color:var(--muted);font-size:15px;margin-left:6px}
 
-#map{flex:1;min-height:180px;background:#2b3a30}
+#stage{flex:1;min-height:200px;position:relative;overflow:hidden;background:#23422a}
+#map{position:absolute;inset:0}
+#hv{position:absolute;inset:0;width:100%;height:100%;z-index:1001;touch-action:manipulation;display:block}
+#viewToggle{position:absolute;left:10px;top:10px;z-index:1003;border:0;border-radius:10px;padding:8px 12px;font-weight:700;font-size:14px;background:rgba(0,0,0,.66);color:#fff}
+#hvNote{position:absolute;left:10px;bottom:8px;z-index:1002;color:rgba(255,255,255,.72);font-size:11px;pointer-events:none}
 .leaflet-container{font:inherit}
 
 .tabs{display:flex;background:var(--panel);border-top:1px solid var(--line)}
@@ -83,6 +87,8 @@ textarea{min-height:90px;font-family:ui-monospace,Menlo,monospace;font-size:12px
 .pin.gf,.pin.gb{background:#9be37a;width:24px;height:24px;font-size:12px}
 .pin.bunker{background:#ead8a0}
 .pin.water{background:#3d9be9;color:#fff}
+.pin.ghost{width:22px;height:22px;font-size:11px;background:rgba(255,255,255,.75);border-color:rgba(0,0,0,.4);color:#222}
+.pin.fw{width:18px;height:18px;font-size:10px;background:#7fd36b}
 .pin.shot{background:#ffd23f;width:22px;height:22px;font-size:10px}
 .me-dot{width:18px;height:18px;border-radius:50%;background:#2f7cff;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,124,255,.4),0 1px 4px rgba(0,0,0,.6)}
 .me-dot.fake{background:#ff8a00}
@@ -105,7 +111,12 @@ textarea{min-height:90px;font-family:ui-monospace,Menlo,monospace;font-size:12px
       <button id="nextHole" aria-label="다음 홀">▶</button>
     </div>
   </header>
-  <div id="map"></div>
+  <div id="stage">
+    <div id="map"></div>
+    <canvas id="hv" hidden aria-label="홀 그래픽"></canvas>
+    <div id="hvNote" hidden>찍은 점으로 그린 예상 모양 · 실제 코스와 다를 수 있음</div>
+    <button id="viewToggle" type="button">위성 보기</button>
+  </div>
   <section id="panel" aria-live="polite"></section>
   <div id="toast" role="status" hidden></div>
   <nav class="tabs" role="tablist">
@@ -125,6 +136,7 @@ const CLUBS = ["D","3W","5W","UT","4I","5I","6I","7I","8I","9I","PW","AW","SW","
 const PT = {
   tee:{label:"티", txt:"티"}, gc:{label:"그린 중앙", txt:"중"},
   gf:{label:"그린 앞", txt:"앞"}, gb:{label:"그린 뒤", txt:"뒤"},
+  fw:{label:"페어웨이 꺾임", txt:"•"},
   bunker:{label:"벙커", txt:"벙"}, water:{label:"해저드", txt:"해"}
 };
 const SINGLE = ["tee","gc","gf","gb"];
@@ -176,6 +188,16 @@ const hole = () => { const c = course(); return c ? c.holes[S.ui.hole] || null :
 const holeKey = () => `${club().id}|${S.ui.course}|${S.ui.hole}`;
 const newHole = (par=4, card=null) => ({par, card, tee:null, gc:null, gf:null, gb:null, hz:[]});
 const MIN_ZOOM = 16;
+function neighbor(){ // 위치가 없는 홀일 때 기준점: 앞 홀 그린 → 다음 홀 티
+  const hs = course()?.holes || [], i = S.ui.hole;
+  return (hs[i-1] && (hs[i-1].gc||hs[i-1].tee)) || (hs[i+1] && (hs[i+1].tee||hs[i+1].gc)) || null;
+}
+function holePath(h){ // 티 → 꺾임점(티에서 가까운 순) → 그린 중앙
+  if(!h.tee || !h.gc) return [h.tee||h.gc].filter(Boolean);
+  const vx=h.gc[1]-h.tee[1], vy=h.gc[0]-h.tee[0];
+  const fw=(h.fw||[]).slice().sort((a,b)=>((a[1]-h.tee[1])*vx+(a[0]-h.tee[0])*vy)-((b[1]-h.tee[1])*vx+(b[0]-h.tee[0])*vy));
+  return [h.tee, ...fw, h.gc];
+}
 
 /* ---------- 지도 ---------- */
 const map = L.map("map", {zoomControl:false, attributionControl:true, maxZoom:21})
@@ -197,7 +219,7 @@ function drawHole(fit){
   const editable = S.ui.mode==="map";
   const pts = [];
   if(h.tee && h.gc){
-    L.polyline([h.tee,h.gc],{color:"#ffffff",weight:2,opacity:.8,dashArray:"6 6"}).addTo(holeLayer);
+    L.polyline(holePath(h),{color:"#ffffff",weight:2,opacity:.8,dashArray:"6 6"}).addTo(holeLayer);
     if(S.ui.mode==="map") holeLayer.addLayer(label(mid(h.tee,h.gc), fmt(dist(h.tee,h.gc))+unitLabel()));
   }
   SINGLE.forEach(t=>{
@@ -205,6 +227,18 @@ function drawHole(fit){
     const m = L.marker(h[t],{icon:icon(t,PT[t].txt), draggable:editable, zIndexOffset: t==="gc"?500:0}).addTo(holeLayer);
     if(editable) m.on("dragend",e=>{ const p=e.target.getLatLng(); h[t]=[p.lat,p.lng]; save(); render(false); });
   });
+  (h.fw||[]).forEach((fp,i)=>{
+    pts.push(fp);
+    const m = L.marker(fp,{icon:icon("fw","•"), draggable:editable}).addTo(holeLayer);
+    if(editable) m.on("dragend",e=>{ const p=e.target.getLatLng(); h.fw[i]=[p.lat,p.lng]; save(); render(false); });
+  });
+  if(editable){ // 같은 코스의 다른 홀 위치(번호) — 탭하면 그 홀로 이동
+    course().holes.forEach((o,i)=>{
+      if(i===S.ui.hole) return;
+      const at = o.gc || o.tee; if(!at) return;
+      L.marker(at,{icon:icon("ghost", i+1)}).on("click",()=>goHole(i-S.ui.hole)).addTo(holeLayer);
+    });
+  }
   h.hz.forEach((z,i)=>{
     pts.push(z.p);
     const m = L.marker(z.p,{icon:icon(z.t,PT[z.t].txt), draggable:editable}).addTo(holeLayer);
@@ -218,9 +252,11 @@ function drawHole(fit){
     if(pts.length>1) map.fitBounds(L.latLngBounds(pts).pad(0.25), {maxZoom:19});
     else if(pts.length===1) map.setView(pts[0], 18);
     else {
+      const nb = neighbor();
       const any = club().courses.flatMap(c=>c.holes).flatMap(x=>[x.tee,x.gc]).filter(Boolean);
-      if(any.length) map.fitBounds(L.latLngBounds(any).pad(0.15), {maxZoom:17});
-      else if(club().center) map.setView(club().center, 16);
+      if(nb) map.setView(nb, Math.max(map.getZoom(),17));
+      else if(fit==="club" && any.length) map.fitBounds(L.latLngBounds(any).pad(0.15), {maxZoom:17});
+      else if(fit==="club" || !any.length) map.setView(club().center, 16);
     }
   }
 }
@@ -254,6 +290,7 @@ map.on("click", e=>{
     if(map.getZoom() < MIN_ZOOM){ toast("홀이 크게 보이도록 더 확대한 뒤 찍어주세요"); return; }
     const t = R.mapType;
     if(SINGLE.includes(t)){ h[t]=p; R.mapType = NEXT_TYPE[t]; }
+    else if(t==="fw") (h.fw ||= []).push(p);
     else h.hz.push({t, p});
     save(); render(false);
   } else if(S.ui.mode==="play"){
@@ -263,6 +300,153 @@ map.on("click", e=>{
   }
 });
 
+/* ---------- 그래픽 홀 뷰 (티가 아래, 그린이 위로 오도록 회전한 축척 그림) ---------- */
+const HC = {bg:"#22402a", tree:"#1a3421", rough:"#3a7140", fair:"#579c4f", stripe:"#62a85a", fringe:"#69b55b",
+  green:"#8bd476", tee:"#78bd69", sand:"#eadfb3", sandEdge:"#c6b17a", water:"#3b88cf", waterEdge:"#86c4f2"};
+S.ui.view ||= "graphic";
+const cv = document.getElementById("hv"), ctx = cv.getContext("2d");
+let GV = null; // 현재 그림의 좌표 변환 (탭 → 위경도 변환에 사용)
+
+function applyView(){
+  const g = S.ui.view==="graphic";
+  cv.hidden = !g; $("#hvNote").hidden = !g;
+  $("#viewToggle").textContent = g ? "위성 보기" : "그래픽 보기";
+}
+document.getElementById("viewToggle").onclick = ()=>{ S.ui.view = S.ui.view==="graphic" ? "sat" : "graphic"; save(); applyView(); if(S.ui.view==="sat"){ map.invalidateSize(); drawHole(true); } drawGraphic(); };
+
+function rng(seed){ let x = seed*9301+49297; return ()=>((x = (x*9301+49297)%233280)/233280); }
+
+function drawGraphic(){
+  if(cv.hidden) return;
+  const W = cv.clientWidth, H = cv.clientHeight, dpr = window.devicePixelRatio||1;
+  if(!W || !H) return;
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle = HC.bg; ctx.fillRect(0,0,W,H);
+  const h = hole(); GV = null;
+  const msg = (t1,t2)=>{ ctx.fillStyle="#fff"; ctx.textAlign="center"; ctx.font="700 17px "+getComputedStyle(document.body).fontFamily;
+    ctx.fillText(t1,W/2,H/2-8); ctx.font="14px "+getComputedStyle(document.body).fontFamily; ctx.fillStyle="rgba(255,255,255,.75)"; ctx.fillText(t2,W/2,H/2+16); };
+  if(!h){ msg("코스가 없습니다","매핑 탭에서 코스를 추가하세요"); return; }
+  if(!h.gc){ msg(`${S.ui.hole+1}번 홀 위치가 아직 없어요`, "매핑 탭 → 위성 보기에서 티와 그린을 찍으면 그림이 생깁니다"); return; }
+
+  // 1) 투영: 그린 중앙 기준 미터 좌표 → 티→그린 방향이 위가 되도록 회전
+  const o = h.gc, k = Math.cos(o[0]*Math.PI/180);
+  const toXY = p=>[(p[1]-o[1])*111320*k, (p[0]-o[0])*110574];
+  const fromXY = ([x,y])=>[o[0]+y/110574, o[1]+x/(111320*k)];
+  let vx=0, vy=1;
+  if(h.tee){ const t=toXY(h.tee), L0=Math.hypot(t[0],t[1]); if(L0>1){ vx=-t[0]/L0; vy=-t[1]/L0; } }
+  const rot = ([x,y])=>[x*vy - y*vx, x*vx + y*vy];
+  const P = ll=>rot(toXY(ll));
+
+  const path = holePath(h).map(P);
+  const segs = []; let total = 0;
+  for(let i=1;i<path.length;i++){ const l=Math.hypot(path[i][0]-path[i-1][0], path[i][1]-path[i-1][1]); segs.push(l); total+=l; }
+  const at = d=>{ // 경로 위 d미터 지점과 진행 방향
+    if(path.length<2) return {p:path[0], dir:[0,1]};
+    d = Math.max(0, Math.min(total, d));
+    for(let i=0;i<segs.length;i++){
+      if(d<=segs[i] || i===segs.length-1){ const a=path[i], b=path[i+1], t=segs[i]?d/segs[i]:0;
+        return {p:[a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t], dir:[(b[0]-a[0])/(segs[i]||1),(b[1]-a[1])/(segs[i]||1)]}; }
+      d -= segs[i];
+    }
+  };
+  const slice = (a,b)=>{ // 경로의 a~b미터 구간
+    const out=[at(a).p]; let acc=0;
+    for(let i=0;i<segs.length;i++){ acc+=segs[i]; if(acc>a && acc<b) out.push(path[i+1]); }
+    out.push(at(b).p); return out;
+  };
+
+  // 그린 모양: 앞·뒤 점이 있으면 그 방향과 길이를 따름
+  let gC=[0,0], gLen=30, gAng=0;
+  if(h.gf && h.gb){ const f=P(h.gf), b=P(h.gb); gC=[(f[0]+b[0])/2,(f[1]+b[1])/2]; gLen=Math.max(18,Math.min(45,Math.hypot(b[0]-f[0],b[1]-f[1]))); gAng=Math.atan2(b[0]-f[0], b[1]-f[1]); }
+  const gWid = gLen*0.78;
+  const hz = h.hz.map(z=>({...z, q:P(z.p)}));
+  const shots = holeShots().map(s=>({...s, q:P(s.p)}));
+  const me = R.me ? P(R.me) : null, meas = R.measure ? P(R.measure) : null;
+
+  // 2) 화면에 맞출 범위: 플레이어가 홀 위에 있으면 앞쪽만 확대
+  let pts = [...path, [gC[0], gC[1]+gLen/2+12], [gC[0], gC[1]-gLen/2-6], ...hz.map(z=>z.q)];
+  const xs0 = pts.map(p=>p[0]), ys0 = pts.map(p=>p[1]);
+  const onHole = me && me[1] > Math.min(...ys0)-60 && me[1] < Math.max(...ys0)+40 && me[0] > Math.min(...xs0)-80 && me[0] < Math.max(...xs0)+80;
+  if(onHole && S.ui.mode==="play"){ pts = pts.filter(p=>p[1] >= me[1]-10); pts.push(me); if(meas) pts.push(meas); }
+  let umin=Math.min(...pts.map(p=>p[0]))-28, umax=Math.max(...pts.map(p=>p[0]))+28;
+  let wmin=Math.min(...pts.map(p=>p[1]))-22, wmax=Math.max(...pts.map(p=>p[1]))+18;
+  if(umax-umin < 90){ const c=(umax+umin)/2; umin=c-45; umax=c+45; }
+  if(wmax-wmin < 80){ const c=(wmax+wmin)/2; wmin=c-40; wmax=c+40; }
+  const top = 52, bot = 22; // 버튼·메모 자리
+  const s = Math.min((W-20)/(umax-umin), (H-top-bot)/(wmax-wmin));
+  const uc=(umin+umax)/2, wc=(wmin+wmax)/2, cy = top + (H-top-bot)/2;
+  const X = ([u,w])=>[W/2+(u-uc)*s, cy-(w-wc)*s];
+  GV = {s, inv:([sx,sy])=>{ const u=(sx-W/2)/s+uc, w=(cy-sy)/s+wc; return fromXY([u*vy + w*vx, -u*vx + w*vy]); }};
+
+  const line = (arr, width, color, dash)=>{ if(arr.length<2) return; ctx.beginPath(); arr.map(X).forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
+    ctx.lineWidth=width; ctx.strokeStyle=color; ctx.lineCap="round"; ctx.lineJoin="round"; ctx.setLineDash(dash||[]); ctx.stroke(); ctx.setLineDash([]); };
+  const ellipse = (c, a, b, ang, fill, edge, ew)=>{ const [x,y]=X(c); ctx.beginPath(); ctx.ellipse(x,y,a*s,b*s,ang,0,Math.PI*2); ctx.fillStyle=fill; ctx.fill(); if(edge){ ctx.lineWidth=ew||2; ctx.strokeStyle=edge; ctx.stroke(); } };
+  const font = (px,wt)=>`${wt||600} ${px}px ${getComputedStyle(document.body).fontFamily}`;
+  const tag = (pt, text, color)=>{ const [x,y]=X(pt); ctx.font=font(13,800); const w=ctx.measureText(text).width+10;
+    ctx.fillStyle="rgba(0,0,0,.72)"; ctx.beginPath(); ctx.roundRect(x-w/2,y-10,w,20,6); ctx.fill(); ctx.fillStyle=color||"#fff"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(text,x,y+1); };
+
+  // 3) 숲 질감
+  const r = rng(S.ui.hole+1+S.ui.course*31);
+  for(let i=0;i<160;i++){ const x=r()*W, y=r()*H, rr=(5+r()*9)*Math.max(.6,Math.min(1.6,s)); ctx.beginPath(); ctx.arc(x,y,rr,0,Math.PI*2); ctx.fillStyle = r()<.5?HC.tree:"#20402a"; ctx.fill(); }
+
+  // 4) 러프 통로 → 페어웨이(잔디 줄무늬) → 티박스
+  if(path.length>1){
+    const ext = at(total).dir, end = [path[path.length-1][0]+ext[0]*22, path[path.length-1][1]+ext[1]*22];
+    line([...path, end], 66*s, HC.rough);
+    const fe = total - (gLen/2 + 7);
+    const fs = h.par>=4 ? Math.min(140, total*0.38) : total - (gLen/2 + 26);
+    if(fe > fs+5){ const fp = slice(fs, fe); line(fp, 30*s, HC.fair); line(fp, 30*s, HC.stripe, [12*s, 12*s]); }
+    const [tx,ty] = X(path[0]); ctx.fillStyle=HC.tee; ctx.strokeStyle="rgba(255,255,255,.85)"; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.roundRect(tx-7*s, ty-5*s, 14*s, 10*s, 3*s); ctx.fill(); ctx.stroke();
+  }
+  // 5) 해저드
+  hz.filter(z=>z.t==="water").forEach((z,i)=>ellipse(z.q, 17, 10, i*0.9, HC.water, HC.waterEdge, 2));
+  hz.filter(z=>z.t==="bunker").forEach((z,i)=>ellipse(z.q, 8, 5, (i*37+15)*Math.PI/180, HC.sand, HC.sandEdge, 1.5));
+  // 6) 그린 + 프린지
+  ellipse(gC, gWid/2+3, gLen/2+3, gAng, HC.fringe);
+  ellipse(gC, gWid/2, gLen/2, gAng, HC.green, "rgba(255,255,255,.35)", 1);
+
+  // 7) 그린까지 거리 표시선 (50 단위)
+  if(path.length>1){
+    const f = S.unit==="yd" ? 1/1.09361 : 1;
+    for(let d=50; d*f < total-25; d+=50){
+      const {p, dir} = at(total - d*f), n=[dir[1], -dir[0]];
+      const a=[p[0]-n[0]*10, p[1]-n[1]*10], b=[p[0]+n[0]*10, p[1]+n[1]*10];
+      line([a,b], 2, "rgba(255,255,255,.8)");
+      const [lx,ly] = X([p[0]+n[0]*36, p[1]+n[1]*36]);
+      ctx.font=font(12,700); ctx.fillStyle="rgba(255,255,255,.9)"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(String(d), lx, ly);
+    }
+  }
+  // 8) 핀
+  { const [x,y] = X([0,0]); ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x,y-26); ctx.stroke();
+    ctx.fillStyle="#e5382b"; ctx.beginPath(); ctx.moveTo(x,y-26); ctx.lineTo(x+14,y-21); ctx.lineTo(x,y-16); ctx.fill();
+    ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fillStyle="#fff"; ctx.fill(); }
+  // 9) 이번 홀 샷
+  shots.forEach(sh=>{ const [x,y]=X(sh.q); ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2); ctx.fillStyle="#ffd23f"; ctx.fill();
+    ctx.fillStyle="#111"; ctx.font=font(9,800); ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(sh.club,x,y+.5); });
+  // 10) 티 거리 / 내 위치 / 레이업 측정
+  if(path.length>1 && !(onHole && S.ui.mode==="play")) tag([path[0][0], path[0][1]-14], `${fmt(dist(h.tee,h.gc))}${unitLabel()}`);
+  if(me && S.ui.mode==="play"){
+    if(meas){ line([me, meas, [0,0]], 3, "#ffd23f");
+      const [mx,my]=X(meas); ctx.beginPath(); ctx.arc(mx,my,7,0,Math.PI*2); ctx.fillStyle="#ffd23f"; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle="#fff"; ctx.stroke();
+      tag([(me[0]+meas[0])/2,(me[1]+meas[1])/2], fmt(dist(R.me,R.measure)), "#ffd23f");
+      tag([meas[0]/2, meas[1]/2], fmt(dist(R.measure,h.gc)), "#ffd23f");
+    } else if(onHole){ line([me,[0,0]], 2, "rgba(255,255,255,.9)", [6,6]); tag([me[0]/2, me[1]/2], `${fmt(dist(R.me,h.gc))}${unitLabel()}`); }
+    if(onHole){ const [x,y]=X(me); ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2); ctx.fillStyle=R.fake?"#ff8a00":"#2f7cff"; ctx.fill(); ctx.lineWidth=3; ctx.strokeStyle="#fff"; ctx.stroke(); }
+    else { ctx.font=font(13,700); ctx.fillStyle="rgba(255,255,255,.85)"; ctx.textAlign="right"; ctx.textBaseline="alphabetic"; ctx.fillText(`내 위치는 이 홀 밖 · 그린까지 ${fmt(dist(R.me,h.gc))}${unitLabel()}`, W-10, 30); }
+  }
+}
+
+cv.addEventListener("click", e=>{
+  if(!GV) return;
+  const rc = cv.getBoundingClientRect(), p = GV.inv([e.clientX-rc.left, e.clientY-rc.top]);
+  if(S.ui.mode==="play"){
+    if(R.fake){ R.me = p; R.measure = null; } else if(R.me){ R.measure = p; } else { toast("GPS가 잡힌 뒤에 거리를 잴 수 있어요"); return; }
+    render(false);
+  } else if(S.ui.mode==="map") toast("위치를 찍으려면 왼쪽 위 '위성 보기'로 바꿔주세요");
+});
+new ResizeObserver(()=>{ map.invalidateSize(); drawGraphic(); }).observe(document.getElementById("stage"));
+
 /* ---------- GPS ---------- */
 function startGps(){
   if(R.watchId!=null || !("geolocation" in navigator)){ if(!("geolocation" in navigator)) R.gpsErr="이 브라우저는 위치를 지원하지 않습니다."; return; }
@@ -270,7 +454,7 @@ function startGps(){
     R.gpsErr = null;
     if(R.fake) return;
     R.me = [pos.coords.latitude, pos.coords.longitude]; R.acc = pos.coords.accuracy;
-    drawMe(); drawMeasure(); if(S.ui.mode==="play") renderPanel();
+    drawMe(); drawMeasure(); drawGraphic(); if(S.ui.mode==="play") renderPanel();
   }, err=>{
     R.gpsErr = err.code===1 ? "위치 권한이 거부됐습니다. 브라우저 설정에서 허용하거나, HTTPS 주소로 열어야 합니다."
       : "GPS 신호를 찾지 못했습니다.";
@@ -371,7 +555,7 @@ function panelMap(){
   if(!c.courses.length) return `<p class="callout"><strong>${esc(c.name)}</strong>에 코스를 추가하세요. 27홀 골프장이면 9홀짜리 코스를 3개 만들면 됩니다.</p>${addCourse}${search}`;
   const types = Object.keys(PT).map(t=>`<button class="chip" data-act="type" data-t="${t}" aria-pressed="${R.mapType===t}">${PT[t].label}${SINGLE.includes(t)&&h[t]?" ✓":""}</button>`).join("");
   return `
-  <p class="note">지도를 탭하면 <strong>${PT[R.mapType].label}</strong> 위치가 ${SINGLE.includes(R.mapType)?"지정":"추가"}됩니다. 마커는 끌어서 옮길 수 있어요.</p>
+  <p class="note">지도를 탭하면 <strong>${PT[R.mapType].label}</strong> 위치가 ${SINGLE.includes(R.mapType)?"지정":"추가"}됩니다. 마커는 끌어서 옮길 수 있어요.${R.mapType==="fw"?" 도그렉 홀은 꺾이는 지점을 찍으면 그래픽이 휘어집니다.":""}</p>
   <div class="chips">${types}</div>
   <div class="row">
     <span class="note">파</span>${[3,4,5].map(p=>`<button class="chip" data-act="par" data-p="${p}" aria-pressed="${h.par===p}">${p}</button>`).join("")}
@@ -379,6 +563,7 @@ function panelMap(){
   </div>
   ${!h.tee&&!h.gc ? `<p class="callout">${S.ui.hole+1}번 홀 티잉구역을 찾아 크게 확대한 뒤 탭하세요. 그다음 그린 중앙을 탭하면 앞·뒤로 자동으로 넘어갑니다.</p>`:""}
   ${h.tee&&h.gc ? `<p class="note">찍은 거리 티 → 그린 중앙 <b>${fmt(dist(h.tee,h.gc))}${unitLabel()}</b>${h.card?` · 스코어카드 ${S.unit==="yd"?Math.round(h.card*1.09361)+"yd":h.card+"m"} (레귤러티)`:""}</p>`:(h.card?`<p class="note">스코어카드 거리 ${h.card}m (레귤러티)</p>`:"")}
+  ${(h.fw||[]).length ? `<div class="list">${h.fw.map((p,i)=>`<div class="item"><span>페어웨이 꺾임 ${i+1}${h.tee?` · 티에서 ${fmt(dist(h.tee,p))}${unitLabel()}`:""}</span><button data-act="delFw" data-i="${i}">삭제</button></div>`).join("")}</div>`:""}
   ${h.hz.length ? `<div class="list">${h.hz.map((z,i)=>`<div class="item"><span>${PT[z.t].label} ${i+1}${h.tee?` · 티에서 ${fmt(dist(h.tee,z.p))}${unitLabel()}`:""}</span><button data-act="delHz" data-i="${i}">삭제</button></div>`).join("")}</div>`:""}
   <div class="row"><button class="btn small danger" data-act="clearHole">이 홀 초기화</button><button class="btn small danger" data-act="delCourse">이 코스 삭제</button></div>
   ${addCourse}${search}`;
@@ -422,19 +607,31 @@ function renderPanel(){
   keep.forEach(([id,v])=>{ const el=document.getElementById(id); if(el && v!=null && v!=="") el.value=v; });
 }
 
-function render(fit){ renderHeader(); renderPanel(); drawHole(fit); drawMe(); drawMeasure(); }
+function render(fit){ renderHeader(); renderPanel(); applyView(); drawHole(fit); drawMe(); drawMeasure(); drawGraphic(); }
 
 let toastT;
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,2200); }
 
 /* ---------- 이벤트 ---------- */
-$("#selClub").onchange = e=>{ S.ui.clubId=e.target.value; S.ui.course=0; S.ui.hole=0; R.measure=null; save(); render(true); };
-$("#selCourse").onchange = e=>{ S.ui.course=+e.target.value; S.ui.hole=0; R.measure=null; save(); render(true); };
-function goHole(d){ const c=course(); if(!c) return; S.ui.hole=(S.ui.hole+d+c.holes.length)%c.holes.length; R.measure=null; R.pickClub=false; const h=hole(); if(S.ui.mode==="map") R.mapType = h.tee ? (h.gc?"bunker":"gc") : "tee"; save(); render(!!(h.tee||h.gc) || S.ui.mode!=="map"); }
+$("#selClub").onchange = e=>{ S.ui.clubId=e.target.value; S.ui.course=0; S.ui.hole=0; R.measure=null; save(); render("club"); };
+$("#selCourse").onchange = e=>{ S.ui.course=+e.target.value; S.ui.hole=0; R.measure=null; save(); render("club"); };
+function goHole(d){
+  const c=course(); if(!c) return;
+  S.ui.hole=(S.ui.hole+d+c.holes.length)%c.holes.length; R.measure=null; R.pickClub=false;
+  const h=hole(), n=S.ui.hole+1;
+  if(S.ui.mode==="map") R.mapType = h.tee ? (h.gc?"bunker":"gc") : "tee";
+  save(); render(true);
+  if(!h.tee && !h.gc){
+    if(S.ui.mode==="map") toast(neighbor() ? `${n}번 홀은 아직 위치가 없어요. 이웃 홀 근처로 옮겼으니 ${n}번 티를 찾아 찍어주세요` : `${n}번 홀은 아직 위치가 없어요. 지도에서 찾아 티부터 찍어주세요`);
+    else toast(`${n}번 홀은 아직 위치가 없어요. 매핑 탭에서 먼저 찍어주세요`);
+  }
+}
 $("#prevHole").onclick = ()=>goHole(-1);
 $("#nextHole").onclick = ()=>goHole(1);
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
-  S.ui.mode=b.dataset.mode; R.pickClub=false; save();
+  S.ui.mode=b.dataset.mode; R.pickClub=false;
+  if(S.ui.mode==="map") S.ui.view="sat"; else if(S.ui.mode==="play") S.ui.view="graphic";
+  save();
   if(S.ui.mode==="play"){ startGps(); keepAwake(true); } else keepAwake(false);
   render(S.ui.mode==="play"||S.ui.mode==="map");
 });
@@ -454,9 +651,10 @@ $("#panel").addEventListener("click", async e=>{
     case "gpsPoint":
       startGps();
       if(!R.me || R.fake){ alert("GPS 위치가 아직 없습니다. 플레이 탭에서 GPS가 잡힌 뒤 다시 시도하세요."); return; }
-      if(SINGLE.includes(R.mapType)){ h[R.mapType]=R.me.slice(); R.mapType=NEXT_TYPE[R.mapType]; } else h.hz.push({t:R.mapType,p:R.me.slice()});
+      if(SINGLE.includes(R.mapType)){ h[R.mapType]=R.me.slice(); R.mapType=NEXT_TYPE[R.mapType]; } else if(R.mapType==="fw") (h.fw ||= []).push(R.me.slice()); else h.hz.push({t:R.mapType,p:R.me.slice()});
       save(); break;
     case "delHz": h.hz.splice(+b.dataset.i,1); save(); break;
+    case "delFw": h.fw.splice(+b.dataset.i,1); save(); break;
     case "clearHole": if(!confirm(`${S.ui.hole+1}번 홀 위치를 모두 지울까요?`)) return; course().holes[S.ui.hole]=newHole(h.par,h.card); R.mapType="tee"; save(); break;
     case "delCourse": if(!confirm(`'${course().name}' 코스를 삭제할까요?`)) return; club().courses.splice(S.ui.course,1); S.ui.course=0; S.ui.hole=0; save(); break;
     case "addCourse": {
@@ -489,13 +687,13 @@ $("#panel").addEventListener("click", async e=>{
       break;
     }
   }
-  render(["clearHole","delCourse","addCourse","import"].includes(a));
+  render(["clearHole","delCourse","addCourse","import"].includes(a) ? "club" : false);
   if(a==="score"||a==="pickClub"||a==="shot") drawHole(false);
 });
 
 /* ---------- 시작 ---------- */
 if(S.ui.mode==="play"){ startGps(); keepAwake(true); }
-render(true);
+render("club");
 </script>
 </body>
 </html>
