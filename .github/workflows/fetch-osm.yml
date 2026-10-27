@@ -1,0 +1,28 @@
+name: fetch-osm
+on:
+  push:
+    paths: [".github/workflows/fetch-osm.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Query Overpass
+        run: |
+          mkdir -p data
+          q() { # $1=name $2=bbox(s,w,n,e)
+            curl -sS -m 120 --retry 3 -X POST https://overpass-api.de/api/interpreter \
+              --data-urlencode "data=[out:json][timeout:90];(nwr[\"golf\"]($2);nwr[\"leisure\"=\"golf_course\"]($2);way[\"natural\"=\"water\"]($2););out geom tags;" \
+              -o "data/osm-$1.json"
+            echo "$1: $(python3 -c "import json;d=json.load(open('data/osm-$1.json'));print(len(d.get('elements',[])),'elements')")"
+          }
+          q yangji 37.192,127.272,37.230,127.315
+          q monarch 36.982,127.605,37.022,127.652
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data && git commit -m "OSM 골프 데이터 가져오기" && git push || echo "no changes"
