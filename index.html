@@ -147,11 +147,11 @@ const mk = (name, card) => ({name, holes: card.map(([par,len])=>({par, card:len|
 function seed(){
   return {v:2, unit:"m",
     clubs:[
-      {id:"yangji", name:"양지파인CC", center:[37.2107,127.2936], courses:[
+      {id:"yangji", name:"양지파인CC", center:[37.2169,127.2934], courses:[
         mk("동코스",[[3,145],[4,310],[4,310],[5,435],[4,384],[5,431],[4,318],[4,247],[3,190]]),
         mk("서코스",[[4,365],[3,155],[5,469],[4,331],[4,340],[4,323],[4,315],[3,189],[5,436]]),
         mk("남코스",[[4,313],[5,431],[3,133],[5,419],[3,156],[4,338],[3,148],[5,470],[4,316]])]},
-      {id:"monarch", name:"모나크CC", center:[37.0019,127.6284], courses:[
+      {id:"monarch", name:"모나크CC", center:[37.0087,127.6277], courses:[
         mk("마운틴코스", Array(9).fill([4])), mk("그랜드코스", Array(9).fill([4]))]}],
     shots:[], scores:{}, ui:{clubId:"yangji", course:0, hole:0, mode:"map"}};
 }
@@ -165,6 +165,7 @@ function load(){
 }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
 let S = load() || seed();
+S.clubs.forEach(c=>{ const d=seed().clubs.find(x=>x.id===c.id); if(d) c.center=d.center; }); // 위치 보정값 반영
 
 /* ---------- 런타임 상태 ---------- */
 const R = { me:null, acc:null, fake:false, measure:null, pickClub:false, mapType:"tee", watchId:null, gpsErr:null, wake:null, search:[] };
@@ -188,6 +189,8 @@ const hole = () => { const c = course(); return c ? c.holes[S.ui.hole] || null :
 const holeKey = () => `${club().id}|${S.ui.course}|${S.ui.hole}`;
 const newHole = (par=4, card=null) => ({par, card, tee:null, gc:null, gf:null, gb:null, hz:[]});
 const MIN_ZOOM = 16;
+/* 골프장 경계선 (© OpenStreetMap 기여자, ODbL) */
+const OUTLINE = {"yangji":[[37.205047,127.290194],[37.205608,127.29196],[37.205755,127.291996],[37.208388,127.292641],[37.210806,127.293241],[37.211755,127.293574],[37.213019,127.294331],[37.213883,127.294829],[37.215084,127.295886],[37.214409,127.297904],[37.213751,127.298848],[37.213584,127.29915],[37.213516,127.299298],[37.213536,127.299325],[37.213592,127.299325],[37.214805,127.299174],[37.215127,127.299942],[37.215087,127.301181],[37.217485,127.301669],[37.219725,127.300518],[37.220436,127.299571],[37.221304,127.299298],[37.222098,127.297936],[37.221905,127.296406],[37.221967,127.296354],[37.223118,127.295376],[37.223093,127.294507],[37.224366,127.293509],[37.224818,127.290119],[37.225468,127.287598],[37.225049,127.287147],[37.224724,127.286697],[37.224605,127.286826],[37.223751,127.288295],[37.223426,127.288499],[37.223101,127.288295],[37.222478,127.287147],[37.221897,127.287491],[37.221742,127.287961],[37.221495,127.291267],[37.221922,127.291482],[37.222486,127.291053],[37.222782,127.291842],[37.222085,127.293123],[37.222092,127.294156],[37.222093,127.294314],[37.221649,127.29484],[37.219979,127.294929],[37.218684,127.294894],[37.218249,127.293638],[37.217796,127.293638],[37.216352,127.292877],[37.215497,127.293509],[37.215391,127.293526],[37.214805,127.293617],[37.214652,127.293284],[37.214711,127.291696],[37.214293,127.291353],[37.213003,127.29101],[37.211285,127.290666],[37.209164,127.290392],[37.209046,127.290377],[37.206577,127.290387],[37.205543,127.289969],[37.205175,127.290012],[37.205047,127.290194]],"monarch":[[37.006939,127.630887],[37.006993,127.631028],[37.006889,127.632008],[37.007084,127.632075],[37.007267,127.632419],[37.00765,127.632237],[37.007846,127.632278],[37.0083,127.631742],[37.008795,127.63132],[37.008857,127.63096],[37.008853,127.630459],[37.008891,127.630199],[37.008728,127.629844],[37.008849,127.629558],[37.008612,127.629407],[37.008533,127.629203],[37.008608,127.628792],[37.008566,127.628703],[37.008345,127.628724],[37.00815,127.628573],[37.008012,127.627983],[37.007996,127.627723],[37.008121,127.627488],[37.008304,127.62741],[37.008433,127.627165],[37.008683,127.62711],[37.008815,127.627385],[37.00894,127.62722],[37.009057,127.626733],[37.009313,127.626743],[37.009467,127.626926],[37.009636,127.626862],[37.009914,127.626733],[37.010171,127.627027],[37.01031,127.627495],[37.010559,127.627366],[37.010567,127.626531],[37.010691,127.626256],[37.010435,127.625605],[37.010457,127.625403],[37.010706,127.625173],[37.010911,127.624246],[37.011028,127.623879],[37.0105,127.62421],[37.010229,127.624026],[37.010251,127.623145],[37.010178,127.62276],[37.009914,127.622448],[37.009709,127.622035],[37.008962,127.623109],[37.008398,127.624081],[37.004785,127.62398],[37.003605,127.627715],[37.003986,127.629578],[37.006939,127.630887]]};
 function neighbor(){ // 위치가 없는 홀일 때 기준점: 앞 홀 그린 → 다음 홀 티
   const hs = course()?.holes || [], i = S.ui.hole;
   return (hs[i-1] && (hs[i-1].gc||hs[i-1].tee)) || (hs[i+1] && (hs[i+1].tee||hs[i+1].gc)) || null;
@@ -208,6 +211,10 @@ L.control.zoom({position:"topright"}).addTo(map);
 const holeLayer = L.layerGroup().addTo(map);
 const meLayer = L.layerGroup().addTo(map);
 const measureLayer = L.layerGroup().addTo(map);
+const outlineLayer = L.layerGroup().addTo(map);
+map.attributionControl.addAttribution("경계선 © OpenStreetMap");
+function drawOutline(){ outlineLayer.clearLayers(); const o=OUTLINE[club().id]; if(o) L.polyline(o,{color:"#ffffff",weight:2,opacity:.7,dashArray:"4 6",interactive:false}).addTo(outlineLayer); }
+function fitClub(){ const o=OUTLINE[club().id]; if(o) map.fitBounds(L.latLngBounds(o).pad(0.05)); else map.setView(club().center,16); }
 
 const icon = (cls, txt) => L.divIcon({className:"", html:`<div class="pin ${cls}">${txt}</div>`, iconSize:[28,28], iconAnchor:[14,14]});
 const label = (latlng, text) => L.tooltip({permanent:true, direction:"center", className:"dlabel"}).setLatLng(latlng).setContent(text);
@@ -255,8 +262,7 @@ function drawHole(fit){
       const nb = neighbor();
       const any = club().courses.flatMap(c=>c.holes).flatMap(x=>[x.tee,x.gc]).filter(Boolean);
       if(nb) map.setView(nb, Math.max(map.getZoom(),17));
-      else if(fit==="club" && any.length) map.fitBounds(L.latLngBounds(any).pad(0.15), {maxZoom:17});
-      else if(fit==="club" || !any.length) map.setView(club().center, 16);
+      else if(fit==="club" || !any.length) fitClub();
     }
   }
 }
@@ -303,7 +309,7 @@ map.on("click", e=>{
 /* ---------- 그래픽 홀 뷰 (티가 아래, 그린이 위로 오도록 회전한 축척 그림) ---------- */
 const HC = {bg:"#22402a", tree:"#1a3421", rough:"#3a7140", fair:"#579c4f", stripe:"#62a85a", fringe:"#69b55b",
   green:"#8bd476", tee:"#78bd69", sand:"#eadfb3", sandEdge:"#c6b17a", water:"#3b88cf", waterEdge:"#86c4f2"};
-S.ui.view ||= "graphic";
+S.ui.view ||= "graphic"; if(S.ui.mode==="map") S.ui.view="sat";
 const cv = document.getElementById("hv"), ctx = cv.getContext("2d");
 let GV = null; // 현재 그림의 좌표 변환 (탭 → 위경도 변환에 사용)
 
@@ -607,7 +613,7 @@ function renderPanel(){
   keep.forEach(([id,v])=>{ const el=document.getElementById(id); if(el && v!=null && v!=="") el.value=v; });
 }
 
-function render(fit){ renderHeader(); renderPanel(); applyView(); drawHole(fit); drawMe(); drawMeasure(); drawGraphic(); }
+function render(fit){ renderHeader(); renderPanel(); applyView(); drawOutline(); drawHole(fit); drawMe(); drawMeasure(); drawGraphic(); }
 
 let toastT;
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,2200); }
