@@ -88,6 +88,7 @@ textarea{min-height:90px;font-family:ui-monospace,Menlo,monospace;font-size:12px
 .me-dot.fake{background:#ff8a00}
 .dlabel{background:rgba(0,0,0,.72);color:#fff;border:0;border-radius:6px;padding:2px 6px;font:700 13px var(--font);box-shadow:none;white-space:nowrap}
 .dlabel::before{display:none}
+#toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 120px);transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;padding:10px 14px;border-radius:10px;font-size:14px;z-index:2000;max-width:calc(100% - 32px);text-align:center}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -106,6 +107,7 @@ textarea{min-height:90px;font-family:ui-monospace,Menlo,monospace;font-size:12px
   </header>
   <div id="map"></div>
   <section id="panel" aria-live="polite"></section>
+  <div id="toast" role="status" hidden></div>
   <nav class="tabs" role="tablist">
     <button role="tab" data-mode="play">플레이</button>
     <button role="tab" data-mode="map">매핑</button>
@@ -128,13 +130,27 @@ const PT = {
 const SINGLE = ["tee","gc","gf","gb"];
 const NEXT_TYPE = {tee:"gc", gc:"gf", gf:"gb", gb:"bunker"};
 
+/* 스코어카드: [파, 레귤러티 거리(m)] — 양지파인 공식 홈페이지 기준. 모나크는 파 미확인(기본 4). */
+const mk = (name, card) => ({name, holes: card.map(([par,len])=>({par, card:len||null, tee:null, gc:null, gf:null, gb:null, hz:[]}))});
 function seed(){
-  return {v:1, unit:"m",
-    clubs:[{id:"yangji", name:"양지파인CC", center:null, courses:[]},
-           {id:"monarch", name:"모나크CC", center:null, courses:[]}],
+  return {v:2, unit:"m",
+    clubs:[
+      {id:"yangji", name:"양지파인CC", center:[37.2107,127.2936], courses:[
+        mk("동코스",[[3,145],[4,310],[4,310],[5,435],[4,384],[5,431],[4,318],[4,247],[3,190]]),
+        mk("서코스",[[4,365],[3,155],[5,469],[4,331],[4,340],[4,323],[4,315],[3,189],[5,436]]),
+        mk("남코스",[[4,313],[5,431],[3,133],[5,419],[3,156],[4,338],[3,148],[5,470],[4,316]])]},
+      {id:"monarch", name:"모나크CC", center:[37.0019,127.6284], courses:[
+        mk("마운틴코스", Array(9).fill([4])), mk("그랜드코스", Array(9).fill([4]))]}],
     shots:[], scores:{}, ui:{clubId:"yangji", course:0, hole:0, mode:"map"}};
 }
-function load(){ try{ const s = JSON.parse(localStorage.getItem(KEY)); return s && s.v===1 ? s : null; }catch(e){ return null; } }
+function load(){
+  try{
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if(s && s.v===2) return s;
+    if(s && s.v===1){ const n = seed(); n.unit=s.unit; n.shots=s.shots||[]; return n; } // 첫 테스트 버전: 코스 정보만 새로 채움
+  }catch(e){}
+  return null;
+}
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
 let S = load() || seed();
 
@@ -158,7 +174,8 @@ const club = () => S.clubs.find(c=>c.id===S.ui.clubId) || S.clubs[0];
 const course = () => club().courses[S.ui.course] || null;
 const hole = () => { const c = course(); return c ? c.holes[S.ui.hole] || null : null; };
 const holeKey = () => `${club().id}|${S.ui.course}|${S.ui.hole}`;
-const newHole = () => ({par:4, tee:null, gc:null, gf:null, gb:null, hz:[]});
+const newHole = (par=4, card=null) => ({par, card, tee:null, gc:null, gf:null, gb:null, hz:[]});
+const MIN_ZOOM = 16;
 
 /* ---------- 지도 ---------- */
 const map = L.map("map", {zoomControl:false, attributionControl:true, maxZoom:21})
@@ -200,7 +217,11 @@ function drawHole(fit){
     if(S.ui.mode==="play" && R.me && h.gc && dist(R.me,h.gc) < 700) pts.push(R.me);
     if(pts.length>1) map.fitBounds(L.latLngBounds(pts).pad(0.25), {maxZoom:19});
     else if(pts.length===1) map.setView(pts[0], 18);
-    else if(club().center) map.setView(club().center, 16);
+    else {
+      const any = club().courses.flatMap(c=>c.holes).flatMap(x=>[x.tee,x.gc]).filter(Boolean);
+      if(any.length) map.fitBounds(L.latLngBounds(any).pad(0.15), {maxZoom:17});
+      else if(club().center) map.setView(club().center, 16);
+    }
   }
 }
 
@@ -230,10 +251,10 @@ map.on("click", e=>{
   const p = [e.latlng.lat, e.latlng.lng];
   if(S.ui.mode==="map"){
     const h = hole(); if(!h) return;
+    if(map.getZoom() < MIN_ZOOM){ toast("홀이 크게 보이도록 더 확대한 뒤 찍어주세요"); return; }
     const t = R.mapType;
     if(SINGLE.includes(t)){ h[t]=p; R.mapType = NEXT_TYPE[t]; }
     else h.hz.push({t, p});
-    if(!club().center) club().center = p;
     save(); render(false);
   } else if(S.ui.mode==="play"){
     if(R.fake){ R.me = p; R.measure = null; }
@@ -356,7 +377,8 @@ function panelMap(){
     <span class="note">파</span>${[3,4,5].map(p=>`<button class="chip" data-act="par" data-p="${p}" aria-pressed="${h.par===p}">${p}</button>`).join("")}
     <button class="btn small" data-act="gpsPoint" style="margin-left:auto">현재 GPS로 ${PT[R.mapType].label} 저장</button>
   </div>
-  ${h.tee&&h.gc ? `<p class="note">티 → 그린 중앙 ${fmt(dist(h.tee,h.gc))}${unitLabel()} (스코어카드 거리와 비교해 보세요)</p>`:""}
+  ${!h.tee&&!h.gc ? `<p class="callout">${S.ui.hole+1}번 홀 티잉구역을 찾아 크게 확대한 뒤 탭하세요. 그다음 그린 중앙을 탭하면 앞·뒤로 자동으로 넘어갑니다.</p>`:""}
+  ${h.tee&&h.gc ? `<p class="note">찍은 거리 티 → 그린 중앙 <b>${fmt(dist(h.tee,h.gc))}${unitLabel()}</b>${h.card?` · 스코어카드 ${S.unit==="yd"?Math.round(h.card*1.09361)+"yd":h.card+"m"} (레귤러티)`:""}</p>`:(h.card?`<p class="note">스코어카드 거리 ${h.card}m (레귤러티)</p>`:"")}
   ${h.hz.length ? `<div class="list">${h.hz.map((z,i)=>`<div class="item"><span>${PT[z.t].label} ${i+1}${h.tee?` · 티에서 ${fmt(dist(h.tee,z.p))}${unitLabel()}`:""}</span><button data-act="delHz" data-i="${i}">삭제</button></div>`).join("")}</div>`:""}
   <div class="row"><button class="btn small danger" data-act="clearHole">이 홀 초기화</button><button class="btn small danger" data-act="delCourse">이 코스 삭제</button></div>
   ${addCourse}${search}`;
@@ -386,7 +408,7 @@ function panelData(){
     <button class="chip" data-act="unit" data-u="m" aria-pressed="${S.unit==="m"}">미터</button>
     <button class="chip" data-act="unit" data-u="yd" aria-pressed="${S.unit==="yd"}">야드</button></div>
   <div><h3>백업 (내보내기)</h3><p class="note">데이터는 이 폰의 이 브라우저에만 저장됩니다. 코스를 다 찍었으면 복사해서 메모 앱 등에 보관하세요.</p>
-    <textarea id="exportBox" readonly>${esc(JSON.stringify({v:1,unit:S.unit,clubs:S.clubs,shots:S.shots,scores:S.scores}))}</textarea>
+    <textarea id="exportBox" readonly>${esc(JSON.stringify({v:2,unit:S.unit,clubs:S.clubs,shots:S.shots,scores:S.scores}))}</textarea>
     <button class="btn small" data-act="copy">복사</button></div>
   <div><h3>불러오기</h3><textarea id="importBox" placeholder="백업한 내용을 붙여넣기"></textarea>
     <button class="btn small primary" data-act="import">불러오기 (현재 데이터 덮어씀)</button></div>`;
@@ -402,10 +424,13 @@ function renderPanel(){
 
 function render(fit){ renderHeader(); renderPanel(); drawHole(fit); drawMe(); drawMeasure(); }
 
+let toastT;
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,2200); }
+
 /* ---------- 이벤트 ---------- */
 $("#selClub").onchange = e=>{ S.ui.clubId=e.target.value; S.ui.course=0; S.ui.hole=0; R.measure=null; save(); render(true); };
 $("#selCourse").onchange = e=>{ S.ui.course=+e.target.value; S.ui.hole=0; R.measure=null; save(); render(true); };
-function goHole(d){ const c=course(); if(!c) return; S.ui.hole=(S.ui.hole+d+c.holes.length)%c.holes.length; R.measure=null; R.pickClub=false; if(S.ui.mode==="map") R.mapType = hole().tee ? (hole().gc?"bunker":"gc") : "tee"; save(); render(true); }
+function goHole(d){ const c=course(); if(!c) return; S.ui.hole=(S.ui.hole+d+c.holes.length)%c.holes.length; R.measure=null; R.pickClub=false; const h=hole(); if(S.ui.mode==="map") R.mapType = h.tee ? (h.gc?"bunker":"gc") : "tee"; save(); render(!!(h.tee||h.gc) || S.ui.mode!=="map"); }
 $("#prevHole").onclick = ()=>goHole(-1);
 $("#nextHole").onclick = ()=>goHole(1);
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
@@ -432,12 +457,12 @@ $("#panel").addEventListener("click", async e=>{
       if(SINGLE.includes(R.mapType)){ h[R.mapType]=R.me.slice(); R.mapType=NEXT_TYPE[R.mapType]; } else h.hz.push({t:R.mapType,p:R.me.slice()});
       save(); break;
     case "delHz": h.hz.splice(+b.dataset.i,1); save(); break;
-    case "clearHole": if(!confirm(`${S.ui.hole+1}번 홀 위치를 모두 지울까요?`)) return; course().holes[S.ui.hole]=newHole(); R.mapType="tee"; save(); break;
+    case "clearHole": if(!confirm(`${S.ui.hole+1}번 홀 위치를 모두 지울까요?`)) return; course().holes[S.ui.hole]=newHole(h.par,h.card); R.mapType="tee"; save(); break;
     case "delCourse": if(!confirm(`'${course().name}' 코스를 삭제할까요?`)) return; club().courses.splice(S.ui.course,1); S.ui.course=0; S.ui.hole=0; save(); break;
     case "addCourse": {
       const name = ($("#newCourseName").value||"").trim() || `코스 ${club().courses.length+1}`;
       const n = +$("#newCourseHoles").value;
-      club().courses.push({name, holes:Array.from({length:n},newHole)});
+      club().courses.push({name, holes:Array.from({length:n},()=>newHole())});
       S.ui.course=club().courses.length-1; S.ui.hole=0; R.mapType="tee"; $("#newCourseName").value=""; save(); break;
     }
     case "search": {
@@ -459,7 +484,7 @@ $("#panel").addEventListener("click", async e=>{
     case "copy": { const t=$("#exportBox"); try{ await navigator.clipboard.writeText(t.value); b.textContent="복사됨"; }catch(err){ t.focus(); t.select(); b.textContent="길게 눌러 복사하세요"; } return; }
     case "import": {
       try{ const d=JSON.parse($("#importBox").value); if(!d.clubs) throw 0;
-        S = {...seed(), ...d, v:1, ui:{...seed().ui, mode:"map"}}; save(); alert("불러왔습니다.");
+        S = {...seed(), ...d, v:2, ui:{...seed().ui, mode:"map"}}; save(); alert("불러왔습니다.");
       }catch(err){ alert("형식이 올바르지 않습니다. 백업한 텍스트 전체를 붙여넣었는지 확인하세요."); return; }
       break;
     }
