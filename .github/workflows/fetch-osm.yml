@@ -8,25 +8,38 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Query Overpass
+      - name: Query Overpass (backoff, several servers)
+        shell: python
         run: |
-          mkdir -p data
-          q() { # $1=name $2=bbox(s,w,n,e)
-            Q="[out:json][timeout:90];(nwr[\"golf\"]($2);nwr[\"leisure\"=\"golf_course\"]($2);way[\"natural\"=\"water\"]($2););out geom tags;"
-            for url in https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter https://overpass.private.coffee/api/interpreter; do
-              curl -sS -m 120 -X POST "$url" \
-                -H "User-Agent: golf-caddie/1.0 (https://github.com/musicfirst1st-blip/golf-caddie)" \
-                -H "Accept: application/json" \
-                --data-urlencode "data=$Q" -o "data/osm-$1.json" || true
-              head -c 1 "data/osm-$1.json" | grep -q "{" && break
-              echo "retry other server ($url failed)"; sleep 5
-            done
-            echo "$1: $(python3 -c "import json;d=json.load(open('data/osm-$1.json'));print(len(d.get('elements',[])),'elements')")"
-          }
-          q yangji 37.192,127.272,37.230,127.315
-          q monarch 36.982,127.605,37.022,127.652
+          import json, time, urllib.request, urllib.parse, os
+          os.makedirs("data", exist_ok=True)
+          servers = ["https://overpass-api.de/api/interpreter",
+                     "https://overpass.private.coffee/api/interpreter",
+                     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+                     "https://overpass.kumi.systems/api/interpreter"]
+          areas = {"yangji": "37.192,127.272,37.230,127.315", "monarch": "36.982,127.605,37.022,127.652"}
+          log = []
+          for name, bb in areas.items():
+              q = f'[out:json][timeout:90];(nwr["golf"]({bb});nwr["leisure"="golf_course"]({bb});way["natural"="water"]({bb}););out geom tags;'
+              body = urllib.parse.urlencode({"data": q}).encode()
+              ok = False; wait = 10
+              for attempt in range(8):
+                  for url in servers:
+                      try:
+                          req = urllib.request.Request(url, data=body, headers={"User-Agent": "golf-caddie/1.0 (personal project; github.com/musicfirst1st-blip/golf-caddie)", "Accept": "application/json"})
+                          raw = urllib.request.urlopen(req, timeout=120).read()
+                          d = json.loads(raw)
+                          open(f"data/osm-{name}.json", "w").write(json.dumps(d, ensure_ascii=False))
+                          log.append(f"{name}: OK {url} {len(d.get('elements', []))} elements"); ok = True; break
+                      except Exception as e:
+                          log.append(f"{name}: attempt {attempt} {url} -> {type(e).__name__} {str(e)[:80]}")
+                  if ok: break
+                  time.sleep(wait); wait = min(wait * 2, 120)
+          open("data/log.txt", "w").write("\n".join(log))
+          print("\n".join(log))
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
