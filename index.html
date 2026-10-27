@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f7a4a">
+<title>마이 캐디</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* 레이아웃: 상단 홀 바 / 위성지도 / 하단 패널(모드별) — 햇빛 아래 가독성 우선 */
+:root{
+  --bg:#eef2ec; --panel:#ffffff; --fg:#13201a; --muted:#5b6b61; --line:#d4dcd5;
+  --accent:#1f7a4a; --accent-fg:#ffffff; --chip:#e4ebe5; --warn:#b4471f;
+  --font:"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",system-ui,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0e1511; --panel:#17211b; --fg:#edf3ee; --muted:#93a398; --line:#2a372f;
+  --accent:#46c07f; --accent-fg:#06140c; --chip:#233029; --warn:#f08a5d; color-scheme:dark;}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--font);-webkit-tap-highlight-color:transparent}
+#app{height:100%;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
+button,select,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:8px max(12px,env(safe-area-inset-right,0px)) 8px max(12px,env(safe-area-inset-left,0px));display:grid;gap:8px}
+.sel-row{display:flex;gap:8px}
+.sel-row select{flex:1;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.hole-nav{display:flex;align-items:center;gap:8px}
+.hole-nav button{width:48px;height:44px;border:0;border-radius:12px;background:var(--chip);font-size:20px}
+.hole-title{flex:1;text-align:center;font-weight:700;font-size:20px;font-variant-numeric:tabular-nums}
+.hole-title small{font-weight:500;color:var(--muted);font-size:15px;margin-left:6px}
+
+#map{flex:1;min-height:180px;background:#2b3a30}
+.leaflet-container{font:inherit}
+
+.tabs{display:flex;background:var(--panel);border-top:1px solid var(--line)}
+.tabs button{flex:1;border:0;background:none;padding:10px 0 calc(10px + env(safe-area-inset-bottom,0px));color:var(--muted);font-weight:600;font-size:14px;border-top:3px solid transparent}
+.tabs button[aria-selected="true"]{color:var(--accent);border-top-color:var(--accent)}
+
+#panel{background:var(--panel);max-height:46vh;overflow-y:auto;padding:12px max(14px,env(safe-area-inset-right,0px)) 14px max(14px,env(safe-area-inset-left,0px));display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+
+.dist{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr);align-items:end;text-align:center}
+.dist span{display:block;color:var(--muted);font-size:13px;letter-spacing:.04em}
+.dist b{display:block;font-variant-numeric:tabular-nums;line-height:1}
+.dist .sm b{font-size:30px;font-weight:600}
+.dist .big b{font-size:60px;font-weight:800;color:var(--accent)}
+.status{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:13px;flex-wrap:wrap}
+.status .warn{color:var(--warn)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--chip);border-radius:999px;padding:6px 12px;font-size:14px;font-variant-numeric:tabular-nums}
+button.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{border:0;border-radius:12px;padding:12px 14px;background:var(--chip);font-weight:600}
+.btn.primary{background:var(--accent);color:var(--accent-fg)}
+.btn.grow{flex:1}
+.btn.small{padding:8px 12px;font-size:14px}
+.btn.danger{color:var(--warn)}
+.score{display:flex;align-items:center;gap:4px;background:var(--chip);border-radius:12px;padding:2px}
+.score button{border:0;background:none;width:40px;height:40px;font-size:20px}
+.score b{min-width:28px;text-align:center;font-size:18px;font-variant-numeric:tabular-nums}
+.note{color:var(--muted);font-size:13px;margin:0}
+.callout{background:var(--chip);border-radius:12px;padding:10px 12px;font-size:14px}
+.callout strong{color:var(--accent)}
+h3{margin:0;font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:14px}
+th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td.num,th.num{text-align:right}
+textarea,input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:8px 10px}
+textarea{min-height:90px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.list{display:grid;gap:4px}
+.list .item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
+.list .item button{border:0;background:none;color:var(--warn);font-size:14px;padding:4px 8px}
+.results button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+
+/* 지도 마커: 위성사진 위라 테마와 무관하게 고정색 */
+.pin{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font:700 13px var(--font);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);color:#111}
+.pin.tee{background:#ffffff;border-color:#222}
+.pin.gc{background:#e5382b;color:#fff}
+.pin.gf,.pin.gb{background:#9be37a;width:24px;height:24px;font-size:12px}
+.pin.bunker{background:#ead8a0}
+.pin.water{background:#3d9be9;color:#fff}
+.pin.shot{background:#ffd23f;width:22px;height:22px;font-size:10px}
+.me-dot{width:18px;height:18px;border-radius:50%;background:#2f7cff;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,124,255,.4),0 1px 4px rgba(0,0,0,.6)}
+.me-dot.fake{background:#ff8a00}
+.dlabel{background:rgba(0,0,0,.72);color:#fff;border:0;border-radius:6px;padding:2px 6px;font:700 13px var(--font);box-shadow:none;white-space:nowrap}
+.dlabel::before{display:none}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="sel-row">
+      <select id="selClub" aria-label="골프장"></select>
+      <select id="selCourse" aria-label="코스"></select>
+    </div>
+    <div class="hole-nav">
+      <button id="prevHole" aria-label="이전 홀">◀</button>
+      <div class="hole-title" id="holeTitle">–</div>
+      <button id="nextHole" aria-label="다음 홀">▶</button>
+    </div>
+  </header>
+  <div id="map"></div>
+  <section id="panel" aria-live="polite"></section>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-mode="play">플레이</button>
+    <button role="tab" data-mode="map">매핑</button>
+    <button role="tab" data-mode="stats">기록</button>
+    <button role="tab" data-mode="data">데이터</button>
+  </nav>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ---------- 데이터 ---------- */
+const KEY = "mycaddie.v1";
+const CLUBS = ["D","3W","5W","UT","4I","5I","6I","7I","8I","9I","PW","AW","SW","PT"];
+const PT = {
+  tee:{label:"티", txt:"티"}, gc:{label:"그린 중앙", txt:"중"},
+  gf:{label:"그린 앞", txt:"앞"}, gb:{label:"그린 뒤", txt:"뒤"},
+  bunker:{label:"벙커", txt:"벙"}, water:{label:"해저드", txt:"해"}
+};
+const SINGLE = ["tee","gc","gf","gb"];
+const NEXT_TYPE = {tee:"gc", gc:"gf", gf:"gb", gb:"bunker"};
+
+function seed(){
+  return {v:1, unit:"m",
+    clubs:[{id:"yangji", name:"양지파인CC", center:null, courses:[]},
+           {id:"monarch", name:"모나크CC", center:null, courses:[]}],
+    shots:[], scores:{}, ui:{clubId:"yangji", course:0, hole:0, mode:"map"}};
+}
+function load(){ try{ const s = JSON.parse(localStorage.getItem(KEY)); return s && s.v===1 ? s : null; }catch(e){ return null; } }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+let S = load() || seed();
+
+/* ---------- 런타임 상태 ---------- */
+const R = { me:null, acc:null, fake:false, measure:null, pickClub:false, mapType:"tee", watchId:null, gpsErr:null, wake:null, search:[] };
+
+/* ---------- 계산 ---------- */
+function dist(a,b){ // 하버사인, 미터
+  if(!a||!b) return null;
+  const toR = d=>d*Math.PI/180, Rm = 6371008.8;
+  const dLat = toR(b[0]-a[0]), dLng = toR(b[1]-a[1]);
+  const h = Math.sin(dLat/2)**2 + Math.cos(toR(a[0]))*Math.cos(toR(b[0]))*Math.sin(dLng/2)**2;
+  return 2*Rm*Math.asin(Math.sqrt(h));
+}
+const conv = m => m==null ? null : (S.unit==="yd" ? m*1.09361 : m);
+const fmt = m => m==null ? "–" : String(Math.round(conv(m)));
+const unitLabel = () => S.unit==="yd" ? "yd" : "m";
+
+/* ---------- 선택 헬퍼 ---------- */
+const club = () => S.clubs.find(c=>c.id===S.ui.clubId) || S.clubs[0];
+const course = () => club().courses[S.ui.course] || null;
+const hole = () => { const c = course(); return c ? c.holes[S.ui.hole] || null : null; };
+const holeKey = () => `${club().id}|${S.ui.course}|${S.ui.hole}`;
+const newHole = () => ({par:4, tee:null, gc:null, gf:null, gb:null, hz:[]});
+
+/* ---------- 지도 ---------- */
+const map = L.map("map", {zoomControl:false, attributionControl:true, maxZoom:21})
+  .setView([36.6,127.8], 7);
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  {maxNativeZoom:19, maxZoom:21, attribution:"Imagery © Esri"}).addTo(map);
+L.control.zoom({position:"topright"}).addTo(map);
+const holeLayer = L.layerGroup().addTo(map);
+const meLayer = L.layerGroup().addTo(map);
+const measureLayer = L.layerGroup().addTo(map);
+
+const icon = (cls, txt) => L.divIcon({className:"", html:`<div class="pin ${cls}">${txt}</div>`, iconSize:[28,28], iconAnchor:[14,14]});
+const label = (latlng, text) => L.tooltip({permanent:true, direction:"center", className:"dlabel"}).setLatLng(latlng).setContent(text);
+const mid = (a,b) => [(a[0]+b[0])/2,(a[1]+b[1])/2];
+
+function drawHole(fit){
+  holeLayer.clearLayers();
+  const h = hole(); if(!h) return;
+  const editable = S.ui.mode==="map";
+  const pts = [];
+  if(h.tee && h.gc){
+    L.polyline([h.tee,h.gc],{color:"#ffffff",weight:2,opacity:.8,dashArray:"6 6"}).addTo(holeLayer);
+    if(S.ui.mode==="map") holeLayer.addLayer(label(mid(h.tee,h.gc), fmt(dist(h.tee,h.gc))+unitLabel()));
+  }
+  SINGLE.forEach(t=>{
+    if(!h[t]) return; pts.push(h[t]);
+    const m = L.marker(h[t],{icon:icon(t,PT[t].txt), draggable:editable, zIndexOffset: t==="gc"?500:0}).addTo(holeLayer);
+    if(editable) m.on("dragend",e=>{ const p=e.target.getLatLng(); h[t]=[p.lat,p.lng]; save(); render(false); });
+  });
+  h.hz.forEach((z,i)=>{
+    pts.push(z.p);
+    const m = L.marker(z.p,{icon:icon(z.t,PT[z.t].txt), draggable:editable}).addTo(holeLayer);
+    if(editable) m.on("dragend",e=>{ const p=e.target.getLatLng(); z.p=[p.lat,p.lng]; save(); render(false); });
+  });
+  if(S.ui.mode!=="map"){ // 이번 홀 샷 위치
+    holeShots().forEach((s,i)=> L.marker(s.p,{icon:icon("shot", s.club), interactive:false}).addTo(holeLayer));
+  }
+  if(fit){
+    if(S.ui.mode==="play" && R.me && h.gc && dist(R.me,h.gc) < 700) pts.push(R.me);
+    if(pts.length>1) map.fitBounds(L.latLngBounds(pts).pad(0.25), {maxZoom:19});
+    else if(pts.length===1) map.setView(pts[0], 18);
+    else if(club().center) map.setView(club().center, 16);
+  }
+}
+
+function drawMe(){
+  meLayer.clearLayers();
+  if(!R.me) return;
+  if(!R.fake && R.acc) L.circle(R.me,{radius:R.acc,color:"#2f7cff",weight:1,fillOpacity:.12}).addTo(meLayer);
+  L.marker(R.me,{icon:L.divIcon({className:"",html:`<div class="me-dot ${R.fake?"fake":""}"></div>`,iconSize:[18,18],iconAnchor:[9,9]}),interactive:false,zIndexOffset:1000}).addTo(meLayer);
+  const h = hole();
+  if(S.ui.mode==="play" && h && h.gc && !R.measure){
+    L.polyline([R.me,h.gc],{color:"#ffd23f",weight:3,opacity:.9}).addTo(meLayer);
+  }
+}
+
+function drawMeasure(){
+  measureLayer.clearLayers();
+  const h = hole();
+  if(!R.measure || !R.me) return;
+  const line = [R.me, R.measure]; if(h && h.gc) line.push(h.gc);
+  L.polyline(line,{color:"#ffd23f",weight:3}).addTo(measureLayer);
+  L.circleMarker(R.measure,{radius:7,color:"#fff",weight:2,fillColor:"#ffd23f",fillOpacity:1}).addTo(measureLayer);
+  measureLayer.addLayer(label(mid(R.me,R.measure), fmt(dist(R.me,R.measure))));
+  if(h && h.gc) measureLayer.addLayer(label(mid(R.measure,h.gc), fmt(dist(R.measure,h.gc))));
+}
+
+map.on("click", e=>{
+  const p = [e.latlng.lat, e.latlng.lng];
+  if(S.ui.mode==="map"){
+    const h = hole(); if(!h) return;
+    const t = R.mapType;
+    if(SINGLE.includes(t)){ h[t]=p; R.mapType = NEXT_TYPE[t]; }
+    else h.hz.push({t, p});
+    if(!club().center) club().center = p;
+    save(); render(false);
+  } else if(S.ui.mode==="play"){
+    if(R.fake){ R.me = p; R.measure = null; }
+    else if(R.me){ R.measure = p; }
+    render(false);
+  }
+});
+
+/* ---------- GPS ---------- */
+function startGps(){
+  if(R.watchId!=null || !("geolocation" in navigator)){ if(!("geolocation" in navigator)) R.gpsErr="이 브라우저는 위치를 지원하지 않습니다."; return; }
+  R.watchId = navigator.geolocation.watchPosition(pos=>{
+    R.gpsErr = null;
+    if(R.fake) return;
+    R.me = [pos.coords.latitude, pos.coords.longitude]; R.acc = pos.coords.accuracy;
+    drawMe(); drawMeasure(); if(S.ui.mode==="play") renderPanel();
+  }, err=>{
+    R.gpsErr = err.code===1 ? "위치 권한이 거부됐습니다. 브라우저 설정에서 허용하거나, HTTPS 주소로 열어야 합니다."
+      : "GPS 신호를 찾지 못했습니다.";
+    if(S.ui.mode==="play") renderPanel();
+  }, {enableHighAccuracy:true, maximumAge:2000, timeout:20000});
+}
+async function keepAwake(on){
+  try{
+    if(on && !R.wake && navigator.wakeLock) R.wake = await navigator.wakeLock.request("screen");
+    if(!on && R.wake){ await R.wake.release(); R.wake=null; }
+  }catch(e){ R.wake=null; }
+}
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible" && S.ui.mode==="play"){ R.wake=null; keepAwake(true);} });
+
+/* ---------- 샷 / 통계 ---------- */
+function holeShots(){ const k = holeKey(); return S.shots.filter(s=>`${s.clubId}|${s.course}|${s.hole}`===k); }
+function shotDistances(){ // 같은 홀 안에서 다음 샷 위치까지 거리
+  const out = [];
+  S.shots.forEach((s,i)=>{
+    const n = S.shots[i+1];
+    if(s.club!=="PT" && n && n.clubId===s.clubId && n.course===s.course && n.hole===s.hole) out.push({club:s.club, d:dist(s.p,n.p)});
+  });
+  return out;
+}
+function clubStats(){
+  const m = {};
+  shotDistances().forEach(({club,d})=>{ (m[club] ||= []).push(d); });
+  return CLUBS.filter(c=>m[c]).map(c=>{ const a=m[c]; return {club:c, n:a.length, avg:a.reduce((x,y)=>x+y,0)/a.length, max:Math.max(...a)}; });
+}
+function recommend(d){
+  if(d==null) return null;
+  const st = clubStats().filter(s=>s.club!=="PT"); if(!st.length) return null;
+  const ok = st.filter(s=>s.avg >= d*0.97).sort((a,b)=>a.avg-b.avg);
+  return ok[0] || st.sort((a,b)=>b.avg-a.avg)[0];
+}
+
+/* ---------- 렌더 ---------- */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function renderHeader(){
+  $("#selClub").innerHTML = S.clubs.map(c=>`<option value="${c.id}" ${c.id===club().id?"selected":""}>${esc(c.name)}</option>`).join("");
+  const cs = club().courses;
+  $("#selCourse").innerHTML = cs.length ? cs.map((c,i)=>`<option value="${i}" ${i===S.ui.course?"selected":""}>${esc(c.name)} (${c.holes.length}홀)</option>`).join("") : `<option>코스 없음</option>`;
+  $("#selCourse").disabled = !cs.length;
+  const h = hole();
+  $("#holeTitle").innerHTML = h ? `${S.ui.hole+1}번 홀<small>Par ${h.par}</small>` : "코스를 추가하세요";
+  $("#prevHole").disabled = $("#nextHole").disabled = !h;
+  document.querySelectorAll(".tabs button").forEach(b=>b.setAttribute("aria-selected", b.dataset.mode===S.ui.mode));
+}
+
+function panelPlay(){
+  const h = hole();
+  if(!h) return `<p class="callout">먼저 <strong>매핑</strong> 탭에서 코스를 추가하고 홀 위치를 찍어주세요.</p>`;
+  if(!h.gc) return `<p class="callout">이 홀은 그린 중앙 위치가 없습니다. <strong>매핑</strong> 탭에서 지정하세요.</p>`;
+  const dC = dist(R.me,h.gc), dF = dist(R.me,h.gf), dB = dist(R.me,h.gb);
+  const hz = R.me ? h.hz.map(z=>({...z,d:dist(R.me,z.p)})).sort((a,b)=>a.d-b.d) : [];
+  const rec = recommend(R.measure ? dist(R.me,R.measure) : dC);
+  const score = S.scores[holeKey()] ?? h.par;
+  let st;
+  if(R.fake) st = `<span>테스트 위치 · 지도를 탭해 내 위치를 옮기세요</span>`;
+  else if(R.gpsErr) st = `<span class="warn">${esc(R.gpsErr)}</span>`;
+  else if(!R.me) st = `<span>GPS 찾는 중…</span>`;
+  else st = `<span>GPS 오차 ±${Math.round(R.acc)}m${R.acc>15?' · 정확도 낮음':''}</span>`;
+  return `
+  <div class="dist">
+    <div class="sm"><span>앞</span><b>${fmt(dF)}</b></div>
+    <div class="big"><span>그린 중앙 (${unitLabel()})</span><b>${fmt(dC)}</b></div>
+    <div class="sm"><span>뒤</span><b>${fmt(dB)}</b></div>
+  </div>
+  <div class="status">${st}<span>지도 탭 = ${R.fake?"내 위치 이동":"레이업 거리 측정"}</span></div>
+  ${R.measure && R.me ? `<div class="callout row" style="justify-content:space-between">
+      <span>탭한 지점까지 <strong>${fmt(dist(R.me,R.measure))}${unitLabel()}</strong> → 남는 거리 <strong>${fmt(dist(R.measure,h.gc))}${unitLabel()}</strong></span>
+      <button class="btn small" data-act="clearMeasure">지우기</button></div>` : ""}
+  ${rec && R.me ? `<p class="callout">추천 클럽 <strong>${rec.club}</strong> · 내 평균 ${fmt(rec.avg)}${unitLabel()} (${rec.n}회 기록)</p>` : ""}
+  ${hz.length ? `<div class="chips">${hz.map(z=>`<span class="chip">${PT[z.t].label} ${fmt(z.d)}</span>`).join("")}</div>` : ""}
+  ${R.pickClub ? `<div><h3>방금 친 클럽 선택 (현재 위치에서 친 샷으로 기록)</h3>
+      <div class="chips" style="margin-top:6px">${CLUBS.map(c=>`<button class="chip" data-act="shot" data-club="${c}">${c}</button>`).join("")}
+      <button class="chip" data-act="cancelShot">취소</button></div></div>` : ""}
+  <div class="row">
+    <button class="btn primary grow" data-act="pickClub" ${R.me?"":"disabled"}>샷 기록</button>
+    <div class="score" aria-label="스코어"><button data-act="score" data-d="-1" aria-label="스코어 감소">−</button><b>${score}</b><button data-act="score" data-d="1" aria-label="스코어 증가">+</button></div>
+    <button class="btn small" data-act="fake" aria-pressed="${R.fake}">${R.fake?"GPS 사용":"테스트 위치"}</button>
+  </div>
+  <p class="note">샷 기록은 공 앞에 서서 치기 직전에 누르세요. 다음 샷 위치까지가 그 클럽의 비거리로 쌓입니다.</p>`;
+}
+
+function panelMap(){
+  const c = club(), h = hole();
+  const addCourse = `<div class="row">
+      <input type="text" id="newCourseName" placeholder="코스 이름 (예: 남코스)" style="flex:1;min-width:140px">
+      <select id="newCourseHoles" class="btn small"><option value="9">9홀</option><option value="18">18홀</option></select>
+      <button class="btn small primary" data-act="addCourse">코스 추가</button></div>`;
+  const search = `<div><h3>지도에서 골프장 찾기</h3>
+      <div class="row" style="margin-top:6px"><input type="text" id="q" value="${esc(c.name.replace(/CC$/,""))}" style="flex:1;min-width:140px">
+      <button class="btn small" data-act="search">검색</button><button class="btn small" data-act="gotoMe">내 위치</button></div>
+      <div class="results">${R.search.map((r,i)=>`<button data-act="goto" data-i="${i}">${esc(r.display_name)}</button>`).join("")}</div></div>`;
+  if(!c.courses.length) return `<p class="callout"><strong>${esc(c.name)}</strong>에 코스를 추가하세요. 27홀 골프장이면 9홀짜리 코스를 3개 만들면 됩니다.</p>${addCourse}${search}`;
+  const types = Object.keys(PT).map(t=>`<button class="chip" data-act="type" data-t="${t}" aria-pressed="${R.mapType===t}">${PT[t].label}${SINGLE.includes(t)&&h[t]?" ✓":""}</button>`).join("");
+  return `
+  <p class="note">지도를 탭하면 <strong>${PT[R.mapType].label}</strong> 위치가 ${SINGLE.includes(R.mapType)?"지정":"추가"}됩니다. 마커는 끌어서 옮길 수 있어요.</p>
+  <div class="chips">${types}</div>
+  <div class="row">
+    <span class="note">파</span>${[3,4,5].map(p=>`<button class="chip" data-act="par" data-p="${p}" aria-pressed="${h.par===p}">${p}</button>`).join("")}
+    <button class="btn small" data-act="gpsPoint" style="margin-left:auto">현재 GPS로 ${PT[R.mapType].label} 저장</button>
+  </div>
+  ${h.tee&&h.gc ? `<p class="note">티 → 그린 중앙 ${fmt(dist(h.tee,h.gc))}${unitLabel()} (스코어카드 거리와 비교해 보세요)</p>`:""}
+  ${h.hz.length ? `<div class="list">${h.hz.map((z,i)=>`<div class="item"><span>${PT[z.t].label} ${i+1}${h.tee?` · 티에서 ${fmt(dist(h.tee,z.p))}${unitLabel()}`:""}</span><button data-act="delHz" data-i="${i}">삭제</button></div>`).join("")}</div>`:""}
+  <div class="row"><button class="btn small danger" data-act="clearHole">이 홀 초기화</button><button class="btn small danger" data-act="delCourse">이 코스 삭제</button></div>
+  ${addCourse}${search}`;
+}
+
+function panelStats(){
+  const st = clubStats();
+  const course = club().courses[S.ui.course];
+  let total = 0, par = 0, played = 0;
+  if(course) course.holes.forEach((h,i)=>{ const k=`${club().id}|${S.ui.course}|${i}`; if(S.scores[k]!=null){ total+=S.scores[k]; par+=h.par; played++; } });
+  return `
+  <div><h3>클럽별 비거리 (${unitLabel()})</h3>
+  ${st.length ? `<table><thead><tr><th>클럽</th><th class="num">횟수</th><th class="num">평균</th><th class="num">최대</th></tr></thead>
+    <tbody>${st.map(s=>`<tr><td>${s.club}</td><td class="num">${s.n}</td><td class="num">${fmt(s.avg)}</td><td class="num">${fmt(s.max)}</td></tr>`).join("")}</tbody></table>`
+   : `<p class="note">아직 기록이 없습니다. 플레이 탭에서 샷 기록을 누르면 쌓입니다.</p>`}</div>
+  <div><h3>이번 코스 스코어</h3>
+  <p class="note" style="margin-top:4px">${played ? `${played}홀 · ${total}타 (${total-par>=0?"+":""}${total-par})` : "입력된 스코어 없음"}</p></div>
+  <div><h3>최근 샷</h3><div class="list">
+  ${S.shots.slice(-15).reverse().map(s=>{ const i=S.shots.indexOf(s); const c=S.clubs.find(x=>x.id===s.clubId); return `<div class="item"><span>${new Date(s.t).toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})} · ${esc(c?c.name:"")} ${s.hole+1}번 · <b>${s.club}</b></span><button data-act="delShot" data-i="${i}">삭제</button></div>`; }).join("") || `<p class="note">없음</p>`}
+  </div></div>
+  <div class="row"><button class="btn small danger" data-act="resetScores">스코어 초기화</button><button class="btn small danger" data-act="resetShots">샷 기록 전체 삭제</button></div>`;
+}
+
+function panelData(){
+  return `
+  <div class="row"><span class="note">거리 단위</span>
+    <button class="chip" data-act="unit" data-u="m" aria-pressed="${S.unit==="m"}">미터</button>
+    <button class="chip" data-act="unit" data-u="yd" aria-pressed="${S.unit==="yd"}">야드</button></div>
+  <div><h3>백업 (내보내기)</h3><p class="note">데이터는 이 폰의 이 브라우저에만 저장됩니다. 코스를 다 찍었으면 복사해서 메모 앱 등에 보관하세요.</p>
+    <textarea id="exportBox" readonly>${esc(JSON.stringify({v:1,unit:S.unit,clubs:S.clubs,shots:S.shots,scores:S.scores}))}</textarea>
+    <button class="btn small" data-act="copy">복사</button></div>
+  <div><h3>불러오기</h3><textarea id="importBox" placeholder="백업한 내용을 붙여넣기"></textarea>
+    <button class="btn small primary" data-act="import">불러오기 (현재 데이터 덮어씀)</button></div>`;
+}
+
+function renderPanel(){
+  const p = {play:panelPlay, map:panelMap, stats:panelStats, data:panelData}[S.ui.mode]();
+  // 입력 중인 텍스트 보존
+  const keep = ["q","newCourseName","importBox"].map(id=>[id,document.getElementById(id)?.value]);
+  $("#panel").innerHTML = p;
+  keep.forEach(([id,v])=>{ const el=document.getElementById(id); if(el && v!=null && v!=="") el.value=v; });
+}
+
+function render(fit){ renderHeader(); renderPanel(); drawHole(fit); drawMe(); drawMeasure(); }
+
+/* ---------- 이벤트 ---------- */
+$("#selClub").onchange = e=>{ S.ui.clubId=e.target.value; S.ui.course=0; S.ui.hole=0; R.measure=null; save(); render(true); };
+$("#selCourse").onchange = e=>{ S.ui.course=+e.target.value; S.ui.hole=0; R.measure=null; save(); render(true); };
+function goHole(d){ const c=course(); if(!c) return; S.ui.hole=(S.ui.hole+d+c.holes.length)%c.holes.length; R.measure=null; R.pickClub=false; if(S.ui.mode==="map") R.mapType = hole().tee ? (hole().gc?"bunker":"gc") : "tee"; save(); render(true); }
+$("#prevHole").onclick = ()=>goHole(-1);
+$("#nextHole").onclick = ()=>goHole(1);
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
+  S.ui.mode=b.dataset.mode; R.pickClub=false; save();
+  if(S.ui.mode==="play"){ startGps(); keepAwake(true); } else keepAwake(false);
+  render(S.ui.mode==="play"||S.ui.mode==="map");
+});
+
+$("#panel").addEventListener("click", async e=>{
+  const b = e.target.closest("[data-act]"); if(!b) return;
+  const a = b.dataset.act, h = hole();
+  switch(a){
+    case "clearMeasure": R.measure=null; break;
+    case "pickClub": R.pickClub=true; break;
+    case "cancelShot": R.pickClub=false; break;
+    case "shot": S.shots.push({t:Date.now(), club:b.dataset.club, clubId:club().id, course:S.ui.course, hole:S.ui.hole, p:R.me.slice()}); R.pickClub=false; save(); break;
+    case "score": { const k=holeKey(); S.scores[k]=Math.max(1,(S.scores[k] ?? h.par)+ +b.dataset.d); save(); break; }
+    case "fake": R.fake=!R.fake; R.measure=null; if(R.fake && !R.me) R.me = h && h.tee ? h.tee.slice() : [map.getCenter().lat,map.getCenter().lng]; if(!R.fake){ R.me=null; R.acc=null; startGps(); } break;
+    case "type": R.mapType=b.dataset.t; break;
+    case "par": h.par=+b.dataset.p; save(); break;
+    case "gpsPoint":
+      startGps();
+      if(!R.me || R.fake){ alert("GPS 위치가 아직 없습니다. 플레이 탭에서 GPS가 잡힌 뒤 다시 시도하세요."); return; }
+      if(SINGLE.includes(R.mapType)){ h[R.mapType]=R.me.slice(); R.mapType=NEXT_TYPE[R.mapType]; } else h.hz.push({t:R.mapType,p:R.me.slice()});
+      save(); break;
+    case "delHz": h.hz.splice(+b.dataset.i,1); save(); break;
+    case "clearHole": if(!confirm(`${S.ui.hole+1}번 홀 위치를 모두 지울까요?`)) return; course().holes[S.ui.hole]=newHole(); R.mapType="tee"; save(); break;
+    case "delCourse": if(!confirm(`'${course().name}' 코스를 삭제할까요?`)) return; club().courses.splice(S.ui.course,1); S.ui.course=0; S.ui.hole=0; save(); break;
+    case "addCourse": {
+      const name = ($("#newCourseName").value||"").trim() || `코스 ${club().courses.length+1}`;
+      const n = +$("#newCourseHoles").value;
+      club().courses.push({name, holes:Array.from({length:n},newHole)});
+      S.ui.course=club().courses.length-1; S.ui.hole=0; R.mapType="tee"; $("#newCourseName").value=""; save(); break;
+    }
+    case "search": {
+      const q = $("#q").value.trim(); if(!q) return;
+      b.textContent="검색 중…";
+      try{
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=kr&accept-language=ko&q=${encodeURIComponent(q)}`);
+        R.search = await r.json();
+        if(!R.search.length) R.search=[{display_name:"결과 없음 — 지도를 직접 움직여 찾아주세요", lat:null}];
+      }catch(err){ R.search=[{display_name:"검색 실패 (인터넷 연결 확인)", lat:null}]; }
+      break;
+    }
+    case "goto": { const r=R.search[+b.dataset.i]; if(r && r.lat){ map.setView([+r.lat,+r.lon],16); club().center=[+r.lat,+r.lon]; save(); R.search=[]; } break; }
+    case "gotoMe": startGps(); if(R.me) map.setView(R.me,17); else alert("위치를 아직 못 찾았습니다. 잠시 후 다시 눌러주세요."); return;
+    case "delShot": S.shots.splice(+b.dataset.i,1); save(); break;
+    case "resetScores": if(!confirm("이 기기의 스코어를 모두 지울까요?")) return; S.scores={}; save(); break;
+    case "resetShots": if(!confirm("샷 기록을 모두 지울까요? 클럽 통계도 사라집니다.")) return; S.shots=[]; save(); break;
+    case "unit": S.unit=b.dataset.u; save(); break;
+    case "copy": { const t=$("#exportBox"); try{ await navigator.clipboard.writeText(t.value); b.textContent="복사됨"; }catch(err){ t.focus(); t.select(); b.textContent="길게 눌러 복사하세요"; } return; }
+    case "import": {
+      try{ const d=JSON.parse($("#importBox").value); if(!d.clubs) throw 0;
+        S = {...seed(), ...d, v:1, ui:{...seed().ui, mode:"map"}}; save(); alert("불러왔습니다.");
+      }catch(err){ alert("형식이 올바르지 않습니다. 백업한 텍스트 전체를 붙여넣었는지 확인하세요."); return; }
+      break;
+    }
+  }
+  render(["clearHole","delCourse","addCourse","import"].includes(a));
+  if(a==="score"||a==="pickClub"||a==="shot") drawHole(false);
+});
+
+/* ---------- 시작 ---------- */
+if(S.ui.mode==="play"){ startGps(); keepAwake(true); }
+render(true);
+</script>
+</body>
+</html>
